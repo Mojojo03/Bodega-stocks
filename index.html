@@ -211,14 +211,39 @@ input::placeholder{color:var(--muted);opacity:.8}
 }
 
 [hidden]{display:none!important}
+
+/* sign-in + sync */
+body.booting #login{visibility:hidden}
+body:not(.authed) .wrap, body:not(.authed) .nav{display:none}
+body.authed .login{display:none}
+.login{max-width:380px;margin:9vh auto 0;display:grid;gap:14px}
+.login h1{font-size:26px;font-weight:600;letter-spacing:-.01em}
+.login-form{display:grid;gap:14px}
+.top .right{display:grid;justify-items:end;gap:5px;min-width:0}
+.pill.sync-off{background:var(--surface-2);color:var(--muted)}
 </style>
 </head>
-<body>
+<body class="booting">
+
+<section class="login" id="login" aria-labelledby="login-title">
+  <h1 id="login-title">Bodega Stock</h1>
+  <p class="meta">Mag-login gamit ang account na ginawa para sa tindahan.</p>
+  <form class="login-form" id="login-form" novalidate>
+    <label class="field"><span class="lbl">Email</span><input id="login-email" type="email" autocomplete="username" inputmode="email" autocapitalize="none" spellcheck="false"></label>
+    <label class="field"><span class="lbl">Password</span><input id="login-pass" type="password" autocomplete="current-password"></label>
+    <p class="err" id="login-err" role="alert"></p>
+    <button class="btn primary" id="login-btn" type="submit">Mag-login</button>
+  </form>
+  <p class="hint" id="login-note"></p>
+</section>
 
 <div class="wrap">
   <header class="top">
     <h1>Bodega Stock</h1>
-    <p class="date" id="today"></p>
+    <div class="right">
+      <p class="date" id="today"></p>
+      <p class="pill ok" id="sync" role="status" hidden></p>
+    </div>
   </header>
 
   <main>
@@ -321,37 +346,52 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, 2800);
 }
-const failMsg = () => 'Hindi na-save. Subukan ulit, o tingnan kung may edit access ka.';
+const failMsg = () => 'Hindi na-save. Subukan ulit.';
 
-/* ---------- data layer (offline: saved on this device) ---------- */
-const KEY = 'bodega-stock-v1';
-function persist() {
-  try { localStorage.setItem(KEY, JSON.stringify({ v: 1, items: S.items, moves: S.moves })); }
-  catch (e) { S.mode = 'memory'; }
+/* ---------- data layer (Firestore: cloud sync + offline cache) ---------- */
+const FB_BASE = 'https://www.gstatic.com/firebasejs/10.14.1/';
+const firebaseConfig = {
+  apiKey: "AIzaSyDSvxwn_AuiE4aj9wNqNTGlqM_gqLM4w5k",
+  authDomain: "bodega-stock-3d13f.firebaseapp.com",
+  projectId: "bodega-stock-3d13f",
+  storageBucket: "bodega-stock-3d13f.firebasestorage.app",
+  messagingSenderId: "332262399955",
+  appId: "1:332262399955:web:7f84b0d63894ea06cc9926"
+};
+let F = null, A = null, auth = null, unsubs = [], slowTimer = 0;
+
+const nn = v => Number.isFinite(+v) ? +v : 0;
+const safeId = id => String(id).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 100);
+const byName = () => (S.user && S.user.email ? S.user.email.split('@')[0] : '');
+const bad = e => {
+  const c = (e && e.code) || '';
+  toast(c.includes('permission') ? 'Walang permiso. Tingnan ang login at ang Firestore rules.' : failMsg());
+};
+const cleanItem = i => ({
+  name: String(i.name).slice(0, 80), category: String(i.category || '').slice(0, 40), unit: String(i.unit || 'pc').slice(0, 16),
+  sku: String(i.sku || '').slice(0, 30), qty: nn(i.qty), reorder: nn(i.reorder), cost: nn(i.cost), price: nn(i.price),
+  createdAt: nn(i.createdAt) || Date.now(), updatedAt: nn(i.updatedAt) || Date.now()
+});
+const cleanMove = m => ({
+  itemId: safeId(m.itemId), name: String(m.name || '').slice(0, 80), unit: String(m.unit || '').slice(0, 16),
+  type: ['in', 'out', 'adjust'].includes(m.type) ? m.type : 'adjust', delta: nn(m.delta), after: nn(m.after),
+  note: String(m.note || '').slice(0, 80), price: nn(m.price), cost: nn(m.cost), at: nn(m.at), by: String(m.by || '').slice(0, 40)
+});
+
+/* Writes are saved on the phone at once and sent to the cloud when there is signal.
+   Their promises only settle after the cloud answers, so never wait on them. */
+function putItem(id, data) {
+  const ref = F.doc(db, 'items', id);
+  (byId(id) ? F.updateDoc(ref, data) : F.setDoc(ref, data)).catch(bad);
+  return Promise.resolve();
 }
-function load() {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return false;
-    const d = JSON.parse(raw);
-    S.items = Array.isArray(d.items) ? d.items : [];
-    S.moves = (Array.isArray(d.moves) ? d.moves : []).sort((x, y) => y.at - x.at);
-    return true;
-  } catch (e) { return false; }
+function addMove(move) {
+  F.addDoc(F.collection(db, 'moves'), { ...move, by: byName() }).catch(bad);
+  return Promise.resolve();
 }
-async function putItem(id, data) {
-  const i = S.items.findIndex(x => x.id === id);
-  if (i < 0) S.items.push({ id, ...data }); else Object.assign(S.items[i], data);
-  persist(); renderAll();
-}
-async function addMove(move) {
-  S.moves.unshift({ id: uid(), ...move });
-  S.moves.sort((x, y) => y.at - x.at);
-  persist();
-}
-async function removeItem(id) {
-  S.items = S.items.filter(i => i.id !== id);
-  persist(); renderAll();
+function removeItem(id) {
+  F.deleteDoc(F.doc(db, 'items', id)).catch(bad);
+  return Promise.resolve();
 }
 async function applyMove(id, mode, qty, note) {
   const it = byId(id); if (!it) throw new Error('missing');
@@ -359,52 +399,29 @@ async function applyMove(id, mode, qty, note) {
   const next = r3(mode === 'in' ? cur + qty : mode === 'out' ? cur - qty : qty);
   const delta = r3(next - cur);
   const at = Date.now();
-  await addMove({ itemId: id, name: it.name, unit: it.unit || '', type: mode === 'set' ? 'adjust' : mode, delta, after: next, note, price: +it.price || 0, cost: +it.cost || 0, at });
-  it.qty = next; it.updatedAt = at;
-  persist(); renderAll();
+  const batch = F.writeBatch(db);
+  batch.set(F.doc(F.collection(db, 'moves')), {
+    itemId: id, name: it.name, unit: it.unit || '', type: mode === 'set' ? 'adjust' : mode, delta, after: next, note,
+    price: +it.price || 0, cost: +it.cost || 0, at, by: byName()
+  });
+  batch.update(F.doc(db, 'items', id), { qty: F.increment(delta), updatedAt: at });
+  batch.commit().catch(bad);
   return { next, delta };
 }
-async function clearSamples() {
-  S.items = S.items.filter(i => !i.example);
-  S.moves = S.moves.filter(m => !m.example);
-  persist(); renderAll();
-}
-function seed() {
-  const now = Date.now(), d0 = startOfDay(now);
-  const rows = [
-    ['rice', 'Rice, 25 kg sack', 'Grains', 'sack', 6, 3, 1180, 1350],
-    ['noodles', 'Instant pancit canton', 'Noodles', 'pack', 84, 40, 11.5, 14],
-    ['sardines', 'Canned sardines 155 g', 'Canned goods', 'can', 18, 24, 19, 24],
-    ['oil', 'Cooking oil 1 L', 'Pantry', 'bottle', 0, 6, 98, 115],
-    ['soy', 'Soy sauce 385 ml', 'Pantry', 'bottle', 22, 10, 21, 27],
-    ['coffee', 'Coffee 3-in-1 sachet', 'Drinks', 'sachet', 140, 60, 5.2, 7],
-    ['water', 'Bottled water 500 ml', 'Drinks', 'bottle', 36, 24, 9, 15],
-    ['soap', 'Bar soap', 'Household', 'pc', 15, 12, 24, 32],
-    ['eggs', 'Eggs, medium (tray of 30)', 'Fresh', 'tray', 4, 4, 232, 260],
-    ['salt', 'Iodized salt 500 g', 'Pantry', 'pack', 30, 10, 14, 18],
-    ['dish', 'Dishwashing liquid 200 ml', 'Household', 'bottle', 11, 8, 31, 40],
-    ['sugar', 'Brown sugar 1 kg', 'Pantry', 'kg', 14, 10, 68, 80]
-  ];
-  S.items = rows.map(([k, name, category, unit, qty, reorder, cost, price]) =>
-    ({ id: 'sample-' + k, name, category, unit, qty, reorder, cost, price, sku: '', example: true, createdAt: d0 - 7 * DAY, updatedAt: now }));
-  const meta = Object.fromEntries(S.items.map(i => [i.id, i]));
-  let s = 7;
-  const rnd = () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
-  const ri = (lo, hi) => lo + Math.floor(rnd() * (hi - lo + 1));
-  const mv = [];
-  const push = (t, k, type, n, note) => {
-    const m = meta['sample-' + k];
-    mv.push({ id: uid(), itemId: m.id, name: m.name, unit: m.unit, type, delta: type === 'in' ? n : -n, after: 0, note, price: m.price, cost: m.cost, at: Math.min(t, now - 60000), example: true });
-  };
-  [[6, 'rice', 10], [6, 'noodles', 120], [6, 'coffee', 200], [3, 'water', 48], [3, 'sardines', 24], [3, 'oil', 12], [2, 'eggs', 6]]
-    .forEach(([d, k, n]) => push(d0 - d * DAY + 9 * 36e5 + ri(0, 50) * 6e4, k, 'in', n, 'Delivery from supplier'));
-  const pool = [['rice', 1, 2], ['noodles', 6, 18], ['sardines', 2, 8], ['oil', 1, 4], ['soy', 1, 3], ['coffee', 10, 30], ['water', 4, 12], ['soap', 1, 3], ['eggs', 1, 2], ['salt', 1, 3], ['dish', 1, 2], ['sugar', 1, 3]];
-  for (let d = 6; d >= 0; d--) {
-    const picks = pool.slice().sort(() => rnd() - .5).slice(0, ri(3, 5));
-    for (const [k, lo, hi] of picks) push(d0 - d * DAY + ri(8, d === 0 ? 13 : 19) * 36e5 + ri(0, 59) * 6e4, k, 'out', ri(lo, hi), 'Sold');
+function importData(d) {
+  const items = (d.items || []).filter(i => i && typeof i.id === 'string' && typeof i.name === 'string' && !i.example);
+  const moves = (d.moves || []).filter(m => m && m.itemId && typeof m.at === 'number' && !m.example);
+  const ops = [];
+  for (const i of items) ops.push([F.doc(db, 'items', safeId(i.id)), cleanItem(i)]);
+  for (const m of moves) ops.push([F.doc(db, 'moves', safeId(m.id || uid())), cleanMove(m)]);
+  const jobs = [];
+  for (let k = 0; k < ops.length; k += 400) {
+    const batch = F.writeBatch(db);
+    for (const [ref, v] of ops.slice(k, k + 400)) batch.set(ref, v);
+    jobs.push(batch.commit());
   }
-  S.moves = mv.sort((x, y) => y.at - x.at);
-  persist();
+  Promise.all(jobs).catch(bad);
+  return { items: items.length, moves: moves.length };
 }
 async function saveFile(filename, data, type) {
   const url = URL.createObjectURL(new Blob([data], { type }));
@@ -412,6 +429,61 @@ async function saveFile(filename, data, type) {
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
+
+function legacy() {
+  try {
+    if (localStorage.getItem('bodega-synced')) return null;
+    const d = JSON.parse(localStorage.getItem('bodega-stock-v1') || 'null');
+    if (!d || !Array.isArray(d.items)) return null;
+    return d.items.some(i => i && !i.example) ? d : null;
+  } catch (e) { return null; }
+}
+const markSynced = () => { try { localStorage.setItem('bodega-synced', '1'); } catch (e) {} };
+
+function renderSync() {
+  const p = $('#sync');
+  if (!S.user) { p.hidden = true; return; }
+  const offline = !navigator.onLine, pend = S.pendItems || S.pendMoves;
+  p.hidden = false;
+  p.className = 'pill ' + (offline ? 'sync-off' : pend ? 'low' : 'ok');
+  p.textContent = offline ? (pend ? 'Offline · may naghihintay' : 'Offline') : pend ? 'Nagsi-sync…' : 'Naka-sync';
+}
+window.addEventListener('online', renderSync);
+window.addEventListener('offline', renderSync);
+
+function stopListening() {
+  unsubs.forEach(u => { try { u(); } catch (e) {} });
+  unsubs = []; clearTimeout(slowTimer);
+}
+function startListening() {
+  stopListening();
+  S.loaded = false; S.err = ''; S.slow = false;
+  const got = { items: false, moves: false };
+  const done = k => { got[k] = true; if (got.items && got.moves) S.loaded = true; };
+  const onErr = e => { S.err = (e && e.code) || 'error'; S.loaded = true; renderAll(); renderSync(); };
+  const opts = { includeMetadataChanges: true };
+  unsubs.push(F.onSnapshot(F.collection(db, 'items'), opts, snap => {
+    S.items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    S.pendItems = snap.metadata.hasPendingWrites; S.cacheItems = snap.metadata.fromCache;
+    S.err = ''; done('items'); renderAll(); renderSync();
+  }, onErr));
+  unsubs.push(F.onSnapshot(F.query(F.collection(db, 'moves'), F.orderBy('at', 'desc'), F.limit(1000)), opts, snap => {
+    S.moves = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    S.pendMoves = snap.metadata.hasPendingWrites;
+    done('moves'); renderAll(); renderSync();
+  }, onErr));
+  slowTimer = setTimeout(() => { if (!S.loaded) { S.loaded = true; S.slow = true; renderAll(); } }, 8000);
+}
+
+const loginMsg = e => {
+  const c = (e && e.code) || '';
+  if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/invalid-email', 'auth/missing-password'].includes(c)) return 'Mali ang email o password.';
+  if (c === 'auth/network-request-failed') return 'Walang internet. Kailangan ng internet sa unang login.';
+  if (c === 'auth/too-many-requests') return 'Masyadong maraming subok. Maghintay sandali at subukan ulit.';
+  if (c === 'auth/unauthorized-domain') return 'Hindi pa pinapayagan ang website na ito sa Firebase (Authentication, Settings, Authorized domains).';
+  if (c === 'auth/operation-not-allowed') return 'Hindi pa naka-on ang Email/Password sa Firebase.';
+  return 'Hindi nakapag-login. Subukan ulit.';
+};
 
 /* ---------- sheet ---------- */
 const sheet = $('#sheet'), scrim = $('#scrim'), sbody = $('#sheet-body');
@@ -597,21 +669,17 @@ function visibleItems() {
 
 function renderBanner() {
   const b = $('#banner'); b.replaceChildren();
-  if (S.mode === 'memory') b.append(el('div', { class: 'note' }, el('p', null, 'Hindi ma-save ng browser na ito ang data. Mawawala ito kapag isinara o nag-refresh ka.')));
-  if (S.slow) b.append(el('div', { class: 'note' }, el('p', null, 'Hindi pa maabot ang saved data. Baka luma ang nakikita mo.')));
-  if (S.items.some(i => i.example)) {
-    let armed = false, t = 0;
-    const btn = el('button', { class: 'btn small', type: 'button' }, 'Clear samples');
-    btn.addEventListener('click', async () => {
-      if (!armed) {
-        armed = true; btn.textContent = 'Tap again to clear';
-        t = setTimeout(() => { armed = false; btn.textContent = 'Clear samples'; }, 4000);
-        return;
-      }
-      clearTimeout(t); btn.disabled = true;
-      try { await clearSamples(); toast('Sample items cleared'); } catch (e) { toast(failMsg()); btn.disabled = false; }
-    });
-    b.append(el('div', { class: 'note' }, el('p', null, 'Mga halimbawang item ito para makita kung paano gumagana. I-clear kapag handa ka nang ilagay ang sarili mong stock.'), btn));
+  const note = (text, ...btns) => b.append(el('div', { class: 'note' }, el('p', null, text), ...btns));
+  if (S.err) note('Hindi ma-load ang data (' + S.err + '). Tingnan ang login at ang Firestore rules.');
+  else if (S.slow) note('Hindi pa maabot ang server. Baka luma ang nakikita mo.');
+  const lg = (S.loaded && !S.err && !S.cacheItems && !S.items.length) ? legacy() : null;
+  if (lg) {
+    const n = lg.items.filter(i => i && !i.example).length;
+    const go = el('button', { class: 'btn small', type: 'button' }, 'I-import');
+    go.addEventListener('click', () => { const r = importData(lg); markSynced(); toast('Ini-import ang ' + r.items + ' item at ' + r.moves + ' galaw…'); renderBanner(); });
+    const no = el('button', { class: 'btn small', type: 'button' }, 'Hindi na');
+    no.addEventListener('click', () => { markSynced(); renderBanner(); });
+    note('May nakitang ' + n + ' item sa lumang offline na data ng phone na ito. I-import sa cloud para makita ng lahat?', go, no);
   }
 }
 
@@ -681,12 +749,12 @@ const inventoryRows = () => [
     r3((+i.qty || 0) * (+i.cost || 0)), r3((+i.qty || 0) * (+i.price || 0))])
 ];
 const movementRows = () => [
-  ['Date', 'Time', 'Item', 'Type', 'Change', 'Stock after', 'Unit', 'Selling price', 'Note'],
+  ['Date', 'Time', 'Item', 'Type', 'Change', 'Stock after', 'Unit', 'Selling price', 'Note', 'By'],
   ...S.moves.map(m => {
     const d = new Date(m.at);
     return [d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'),
       d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }), m.name, m.type === 'adjust' ? 'set/adjust' : m.type,
-      m.delta, m.after, m.unit || '', +m.price || 0, m.note || ''];
+      m.delta, m.after, m.unit || '', +m.price || 0, m.note || '', m.by || ''];
   })
 ];
 
@@ -806,35 +874,30 @@ function renderReport() {
       el('button', { class: 'btn', type: 'button', onclick: () => exportCsv('stock-movements-' + stamp() + '.csv', movementRows()) }, 'Download movements (CSV)')),
     el('p', { class: 'sub' }, 'Bubukas sa Excel o Google Sheets.')));
 
-  // backup + restore (data lives only on this device)
-  const fileIn = el('input', { type: 'file', accept: 'application/json,.json', id: 'restore-file', hidden: true });
+  // backup + import + account
+  const fileIn = el('input', { type: 'file', accept: 'application/json,.json', id: 'import-file', hidden: true });
   fileIn.addEventListener('change', async () => {
     const f = fileIn.files && fileIn.files[0]; if (!f) return;
     try {
       const d = JSON.parse(await f.text());
       if (!Array.isArray(d.items) || !Array.isArray(d.moves)) throw new Error('bad');
-      S.items = d.items.filter(i => i && typeof i.id === 'string' && typeof i.name === 'string');
-      S.moves = d.moves.filter(m => m && typeof m.at === 'number').sort((x, y) => y.at - x.at);
-      persist(); renderAll(); toast('Na-restore ang backup');
+      const r = importData(d);
+      toast('Ini-import ang ' + r.items + ' item at ' + r.moves + ' galaw…');
     } catch (e) { toast('Hindi mabasa ang backup file.'); }
-  });
-  let armed = false, armT = 0;
-  const restoreBtn = el('button', { class: 'btn', type: 'button' }, 'Restore from backup');
-  restoreBtn.addEventListener('click', () => {
-    if (!armed) {
-      armed = true; restoreBtn.textContent = 'Tap again: papalitan ang kasalukuyang data';
-      armT = setTimeout(() => { armed = false; restoreBtn.textContent = 'Restore from backup'; }, 5000);
-      return;
-    }
-    clearTimeout(armT); armed = false; restoreBtn.textContent = 'Restore from backup';
-    fileIn.value = ''; fileIn.click();
   });
   root.append(el('section', null,
     el('h2', null, 'Backup'),
     el('div', { class: 'actions' },
       el('button', { class: 'btn primary', type: 'button', onclick: () => { saveFile('bodega-backup-' + stamp() + '.json', JSON.stringify({ v: 1, items: S.items, moves: S.moves }), 'application/json'); toast('Na-download ang backup'); } }, 'Download backup'),
-      restoreBtn, fileIn),
-    el('p', { class: 'sub' }, 'Nasa phone/browser na ito lang ang data mo. Mag-download ng backup paminsan-minsan, lalo na bago burahin ang browser data o palitan ang phone.')));
+      el('button', { class: 'btn', type: 'button', onclick: () => { fileIn.value = ''; fileIn.click(); } }, 'Import from backup'), fileIn),
+    el('p', { class: 'sub' }, 'Nasa cloud na ang data ninyo, pero mabuting may kopya pa rin. Ang pag-import ay nagdaragdag o nagpapalit ng item na may parehong ID. Wala itong binubura.')));
+
+  if (S.user) root.append(el('section', null,
+    el('h2', null, 'Account'),
+    el('p', { class: 'meta' }, 'Naka-login: ' + (S.user.email || '')),
+    el('div', { class: 'actions', style: 'margin-top:10px' },
+      el('button', { class: 'btn', type: 'button', onclick: () => { if (A && auth) A.signOut(auth).catch(() => {}); } }, 'Mag-logout')),
+    el('p', { class: 'sub' }, 'Huwag mag-logout habang offline at may naghihintay na sync.')));
 }
 
 /* ---------- history tab ---------- */
@@ -853,7 +916,7 @@ function renderHistory() {
     const tag = m.type === 'in' ? 'IN' : m.type === 'out' ? 'OUT' : 'SET';
     ul.append(el('li', { class: 'mv' },
       el('span', { class: 'tag ' + (m.type === 'in' ? 'in' : m.type === 'out' ? 'out' : '') }, tag),
-      el('div', { class: 'what' }, el('div', null, m.name), m.note ? el('div', null, m.note) : null),
+      el('div', { class: 'what' }, el('div', null, m.name), (m.by || m.note) ? el('div', null, [m.by, m.note].filter(Boolean).join(' · ')) : null),
       el('div', { class: 'amt' }, el('b', null, (d > 0 ? '+' : d < 0 ? '−' : '') + q(Math.abs(d)) + ' ' + (m.unit || '')), el('span', null, timeLabel(m.at)))));
   }
   if (S.moves.length > shown.length) root.append(el('p', { class: 'sub' }, 'Showing the latest 150. I-download ang CSV sa Report para sa buong listahan.'));
@@ -880,9 +943,39 @@ $('#q').addEventListener('input', e => { S.q = e.target.value; renderStock(); })
 $('#today').textContent = new Date().toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric' });
 
 /* ---------- boot ---------- */
-if (!load()) seed();
-S.loaded = true; S.mode = 'offline';
 renderAll();
+
+async function boot() {
+  const form = $('#login-form'), btn = $('#login-btn'), err = $('#login-err');
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!auth) { err.textContent = 'Hindi pa handa. Maghintay ng ilang segundo at subukan ulit.'; return; }
+    err.textContent = ''; btn.disabled = true;
+    try { await A.signInWithEmailAndPassword(auth, $('#login-email').value.trim(), $('#login-pass').value); $('#login-pass').value = ''; }
+    catch (e2) { err.textContent = loginMsg(e2); btn.disabled = false; }
+  });
+  try {
+    const [appM, authM, fsM] = await Promise.all([
+      import(FB_BASE + 'firebase-app.js'), import(FB_BASE + 'firebase-auth.js'), import(FB_BASE + 'firebase-firestore.js')]);
+    F = fsM; A = authM;
+    const app = appM.initializeApp(firebaseConfig);
+    try { db = F.initializeFirestore(app, { localCache: F.persistentLocalCache({ tabManager: F.persistentMultipleTabManager() }) }); }
+    catch (e) { db = F.getFirestore(app); }
+    auth = A.getAuth(app);
+    A.onAuthStateChanged(auth, user => {
+      S.user = user || null;
+      document.body.classList.remove('booting');
+      document.body.classList.toggle('authed', !!user);
+      if (user) startListening();
+      else { stopListening(); S.items = []; S.moves = []; S.loaded = false; btn.disabled = false; }
+      renderAll(); renderSync();
+    });
+  } catch (e) {
+    document.body.classList.remove('booting');
+    $('#login-note').textContent = 'Hindi ma-load ang app. Kailangan ng internet sa unang bukas. Pagkatapos nito, gagana na offline.';
+  }
+}
+boot();
 
 /* offline app: ask the browser to keep this site's data, and cache the app files */
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
