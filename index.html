@@ -1,0 +1,896 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Bodega Stock</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#f1f5f3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d1411" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bodega Stock">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+
+<style>
+/* Layout: phone-first single column. Three tabs (Stock, Report, History) on a fixed bottom bar; every edit happens in a bottom sheet. */
+:root{
+  color-scheme:light;
+  --bg:#f1f5f3; --surface:#ffffff; --surface-2:#e8eeeb; --ink:#13201a; --muted:#566860; --line:#d3ddd8;
+  --accent:#0b6b51; --accent-ink:#ffffff; --accent-soft:#d7eee5;
+  --warn:#8f5200; --warn-soft:#fbebc6; --bad:#b3261e; --bad-soft:#fadfdb; --bad-ink:#ffffff;
+  --good:#17703f; --good-soft:#d9f0e2; --out:#c4501a;
+  --font-ui:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --font-num:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0d1411; --surface:#151f1a; --surface-2:#1e2b25; --ink:#e5eee9; --muted:#92a69c; --line:#2a3a32;
+    --accent:#58cfaa; --accent-ink:#04231a; --accent-soft:#163a2f;
+    --warn:#f2b650; --warn-soft:#3a2c0f; --bad:#ff8f80; --bad-soft:#3e1c18; --bad-ink:#2b0a06;
+    --good:#72d89d; --good-soft:#143523; --out:#f39a5c;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0d1411; --surface:#151f1a; --surface-2:#1e2b25; --ink:#e5eee9; --muted:#92a69c; --line:#2a3a32;
+  --accent:#58cfaa; --accent-ink:#04231a; --accent-soft:#163a2f;
+  --warn:#f2b650; --warn-soft:#3a2c0f; --bad:#ff8f80; --bad-soft:#3e1c18; --bad-ink:#2b0a06;
+  --good:#72d89d; --good-soft:#143523; --out:#f39a5c;
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+html.lock{overflow:hidden}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:var(--font-ui); font-size:15px; line-height:1.45;
+  -webkit-text-size-adjust:100%;
+  padding-block:calc(14px + env(safe-area-inset-top,0px)) calc(92px + env(safe-area-inset-bottom,0px));
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+}
+.wrap{max-width:640px;margin:0 auto}
+h1,h2,h3,p{margin:0}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.num{font-family:var(--font-num);font-variant-numeric:tabular-nums}
+
+/* header */
+.top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}
+.top h1{font-size:21px;font-weight:600;letter-spacing:-.01em}
+.top .date{font-size:13px;color:var(--muted)}
+
+/* notes */
+.note{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--warn-soft);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13.5px}
+.note p{flex:1 1 200px;min-width:0}
+.note + .note{margin-top:-4px}
+
+/* summary */
+.sum{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.cell{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 11px;text-align:left;min-width:0}
+button.cell:hover{border-color:var(--accent)}
+.cell .k{display:block;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.cell .v{display:block;font-family:var(--font-num);font-variant-numeric:tabular-nums;font-size:19px;font-weight:600;margin-top:2px;overflow-wrap:anywhere}
+.cell .v.warn{color:var(--warn)}
+
+/* toolbar + chips */
+.toolbar{display:flex;gap:8px;margin-bottom:10px}
+.toolbar input{flex:1;min-width:0}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.chip{min-height:36px;padding:0 13px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13.5px;font-weight:500}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+
+/* controls */
+input,select{
+  font:inherit;font-size:16px;color:var(--ink);background:var(--surface);
+  border:1px solid var(--line);border-radius:10px;padding:9px 12px;min-height:44px;width:100%;
+}
+input[type="search"]{-webkit-appearance:none;appearance:none}
+input::placeholder{color:var(--muted);opacity:.8}
+.btn{min-height:44px;padding:0 16px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-weight:600;white-space:nowrap}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.danger{color:var(--bad);border-color:var(--bad);background:transparent}
+.btn.danger.armed{background:var(--bad);color:var(--bad-ink)}
+.btn.small{min-height:36px;padding:0 12px;font-size:13.5px}
+.btn:disabled{opacity:.45;cursor:default}
+.icon-btn{width:40px;height:40px;border-radius:10px;border:0;background:var(--surface-2);display:grid;place-items:center}
+.icon-btn svg{width:20px;height:20px}
+
+/* pills */
+.pill{display:inline-flex;align-items:center;gap:6px;width:fit-content;font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:999px}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.ok{background:var(--good-soft);color:var(--good)}
+.pill.low{background:var(--warn-soft);color:var(--warn)}
+.pill.out{background:var(--bad-soft);color:var(--bad)}
+
+/* grouped list */
+.list{list-style:none;margin:0;padding:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.list > li + li{border-top:1px solid var(--line)}
+.item{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:11px 12px}
+.info{display:grid;gap:3px;text-align:left;background:none;border:0;padding:0;min-width:0;min-height:44px;align-content:center}
+.name{font-weight:500;overflow-wrap:anywhere}
+.meta{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+.qty{text-align:right;min-width:48px}
+.qty b{display:block;font-family:var(--font-num);font-variant-numeric:tabular-nums;font-size:19px;font-weight:600}
+.qty small{display:block;font-size:11.5px;color:var(--muted);overflow-wrap:anywhere}
+.qty.low b{color:var(--warn)}
+.qty.out b{color:var(--bad)}
+.steps{display:flex;gap:6px}
+.step{width:42px;height:42px;border-radius:10px;border:0;font-size:22px;line-height:1;font-weight:500;display:grid;place-items:center}
+.step.plus{background:var(--accent-soft);color:var(--accent)}
+.step.minus{background:var(--surface-2);color:var(--ink)}
+.step:disabled{opacity:.35;cursor:default}
+
+.empty{background:var(--surface);border:1px dashed var(--line);border-radius:12px;padding:28px 18px;text-align:center;color:var(--muted);display:grid;gap:12px;justify-items:center}
+.empty h3{font-size:16px;color:var(--ink)}
+
+/* report + history */
+.tab > section{margin-bottom:26px}
+.tab h2{font-size:12px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.tab .sub{font-size:12.5px;color:var(--muted);margin-top:8px}
+.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.legend{display:flex;gap:14px;font-size:12.5px;color:var(--muted);margin-bottom:10px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.chart{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 8px 10px}
+.col{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0}
+.bars{height:104px;width:100%;display:flex;align-items:flex-end;justify-content:center;gap:3px;border-bottom:1px solid var(--line)}
+.bars i{display:block;width:38%;max-width:16px;border-radius:3px 3px 0 0}
+.b-in{background:var(--accent)}
+.b-out{background:var(--out)}
+.col .d{font-size:11.5px;color:var(--muted);margin-top:3px}
+.col .n{font-family:var(--font-num);font-variant-numeric:tabular-nums;font-size:11px;line-height:1.3}
+.col .n.in{color:var(--accent)}
+.col .n.outv{color:var(--out)}
+.rank{display:grid;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px}
+.stats + .rank{margin-top:8px}
+.rank .line{display:flex;justify-content:space-between;gap:10px;font-size:14px}
+.rank .line span:first-child{min-width:0;overflow-wrap:anywhere}
+.bar{height:8px;border-radius:4px;background:var(--surface-2);overflow:hidden;margin-top:5px}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:4px}
+.restock{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;align-items:center;padding:11px 12px}
+.restock .sug{font-family:var(--font-num);font-variant-numeric:tabular-nums;font-weight:600;text-align:right}
+.restock .btn{grid-column:1 / -1;justify-self:start}
+.total{display:flex;justify-content:space-between;gap:10px;padding:11px 12px;background:var(--surface-2);font-weight:600}
+.day{font-size:12px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin:18px 0 8px}
+.day:first-child{margin-top:0}
+.mv{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 12px}
+.tag{font-size:11px;font-weight:600;letter-spacing:.05em;padding:2px 8px;border-radius:6px;background:var(--surface-2)}
+.tag.in{background:var(--accent-soft);color:var(--accent)}
+.tag.out{background:var(--warn-soft);color:var(--out)}
+.mv .what{min-width:0}
+.mv .what div:first-child{overflow-wrap:anywhere}
+.mv .what div+div{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+.mv .amt{text-align:right}
+.mv .amt b{display:block;font-family:var(--font-num);font-variant-numeric:tabular-nums}
+.mv .amt span{font-size:12px;color:var(--muted)}
+
+/* bottom bar */
+.nav{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--surface);border-top:1px solid var(--line);
+  padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px))}
+.nav-in{max-width:640px;margin:0 auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+.nav button{min-height:52px;border:0;background:none;border-radius:10px;display:grid;justify-items:center;align-content:center;gap:2px;font-size:12px;font-weight:500;color:var(--muted)}
+.nav button svg{width:22px;height:22px}
+.nav button[aria-current="page"]{color:var(--accent);background:var(--accent-soft)}
+
+/* sheet */
+.scrim{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.5)}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:31;max-height:92%;overflow-y:auto;overscroll-behavior:contain;
+  background:var(--surface);border-radius:18px 18px 0 0;box-shadow:0 -10px 34px rgba(0,0,0,.28);
+  padding:14px max(16px,env(safe-area-inset-right,0px)) calc(18px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.sheet-in{max-width:640px;margin:0 auto;display:grid;gap:14px}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.sheet-head h2{font-size:17px;font-weight:600;overflow-wrap:anywhere}
+.field{display:grid;gap:5px;min-width:0}
+.lbl{font-size:12.5px;font-weight:600;color:var(--muted)}
+.hint{font-size:12px;color:var(--muted)}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.seg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;background:var(--surface-2);padding:3px;border-radius:12px}
+.seg button{min-height:40px;border:0;border-radius:9px;background:none;font-weight:600;font-size:14px;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.seg button[aria-pressed="true"].m-in{color:var(--accent)}
+.seg button[aria-pressed="true"].m-out{color:var(--out)}
+.qrow{display:grid;grid-template-columns:52px minmax(0,1fr) 52px;gap:8px}
+.qrow .btn{padding:0;font-size:22px}
+.qrow input{text-align:center;font-family:var(--font-num);font-size:24px;font-weight:600}
+.preview{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;background:var(--surface-2);border-radius:10px;padding:10px 12px;font-size:14px}
+.preview b{font-family:var(--font-num);font-variant-numeric:tabular-nums}
+.err{min-height:1.2em;color:var(--bad);font-size:13.5px}
+.actions{display:grid;gap:8px}
+
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(78px + env(safe-area-inset-bottom,0px));z-index:40;
+  background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:10px;max-width:calc(100% - 32px);font-size:14px;text-align:center}
+
+@media (prefers-reduced-motion:no-preference){
+  .sheet{animation:rise .18s ease-out}
+  @keyframes rise{from{transform:translateY(24px);opacity:.6}to{transform:none;opacity:1}}
+}
+
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <h1>Bodega Stock</h1>
+    <p class="date" id="today"></p>
+  </header>
+
+  <main>
+    <section class="tab" id="tab-stock">
+      <div id="banner"></div>
+      <div class="sum" id="sum"></div>
+      <div class="toolbar">
+        <input id="q" type="search" placeholder="Search item, category, SKU" autocomplete="off" enterkeyhint="search" aria-label="Search items">
+        <button class="btn primary" id="add" type="button">Add item</button>
+      </div>
+      <div class="chips" id="chips" role="group" aria-label="Filter items"></div>
+      <div id="list"></div>
+    </section>
+    <section class="tab" id="tab-report" hidden></section>
+    <section class="tab" id="tab-history" hidden></section>
+  </main>
+</div>
+
+<nav class="nav" aria-label="Sections">
+  <div class="nav-in">
+    <button type="button" data-tab="stock" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Z"/><path d="m3 7.5 9 4.5 9-4.5M12 12v9"/></svg>
+      Stock
+    </button>
+    <button type="button" data-tab="report">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>
+      Report
+    </button>
+    <button type="button" data-tab="history">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      History
+    </button>
+  </div>
+</nav>
+
+<div class="scrim" id="scrim" hidden></div>
+<section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+  <div class="sheet-in" id="sheet-body"></div>
+</section>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script>
+(() => {
+'use strict';
+
+/* ---------- helpers ---------- */
+const $ = (s, r = document) => r.querySelector(s);
+const el = (tag, attrs, ...kids) => {
+  const n = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') n.className = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null || kid === false) continue;
+    n.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return n;
+};
+const svg = inner => {
+  const t = document.createElement('template');
+  t.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">' + inner + '</svg>';
+  return t.content.firstChild;
+};
+const DAY = 864e5;
+const r3 = x => Math.round(x * 1000) / 1000;
+const num = (v, d = 0) => { const n = parseFloat(v); return Number.isFinite(n) ? n : d; };
+const q = n => new Intl.NumberFormat('en-PH', { maximumFractionDigits: 2 }).format(Number(n) || 0);
+const peso = v => {
+  v = Number(v) || 0;
+  const frac = Math.abs(v % 1) > 0.004;
+  return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: frac ? 2 : 0, maximumFractionDigits: frac ? 2 : 0 }).format(v);
+};
+const pesoShort = v => Math.abs(v) >= 100000
+  ? new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', notation: 'compact', maximumFractionDigits: 1 }).format(v)
+  : peso(v);
+const startOfDay = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const dayLabel = t => {
+  const s = startOfDay(Date.now()), d = startOfDay(t);
+  if (d === s) return 'Today';
+  if (d === s - DAY) return 'Yesterday';
+  return new Date(t).toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' });
+};
+const timeLabel = t => new Date(t).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
+const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+
+/* ---------- state ---------- */
+const S = { items: [], moves: [], tab: 'stock', filter: 'all', q: '', range: 7, loaded: false, mode: 'pending', slow: false };
+let db = null, dl = null, chain = Promise.resolve(), lastFocus = null, toastTimer = 0;
+const queue = fn => { const p = chain.then(fn); chain = p.catch(() => {}); return p; };
+const byId = id => S.items.find(i => i.id === id);
+const status = i => { const n = +i.qty || 0; if (n <= 0) return 'out'; if (n <= (+i.reorder || 0)) return 'low'; return 'ok'; };
+const STAT = { ok: 'In stock', low: 'Low', out: 'Out of stock' };
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 2800);
+}
+const failMsg = () => 'Hindi na-save. Subukan ulit, o tingnan kung may edit access ka.';
+
+/* ---------- data layer (offline: saved on this device) ---------- */
+const KEY = 'bodega-stock-v1';
+function persist() {
+  try { localStorage.setItem(KEY, JSON.stringify({ v: 1, items: S.items, moves: S.moves })); }
+  catch (e) { S.mode = 'memory'; }
+}
+function load() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return false;
+    const d = JSON.parse(raw);
+    S.items = Array.isArray(d.items) ? d.items : [];
+    S.moves = (Array.isArray(d.moves) ? d.moves : []).sort((x, y) => y.at - x.at);
+    return true;
+  } catch (e) { return false; }
+}
+async function putItem(id, data) {
+  const i = S.items.findIndex(x => x.id === id);
+  if (i < 0) S.items.push({ id, ...data }); else Object.assign(S.items[i], data);
+  persist(); renderAll();
+}
+async function addMove(move) {
+  S.moves.unshift({ id: uid(), ...move });
+  S.moves.sort((x, y) => y.at - x.at);
+  persist();
+}
+async function removeItem(id) {
+  S.items = S.items.filter(i => i.id !== id);
+  persist(); renderAll();
+}
+async function applyMove(id, mode, qty, note) {
+  const it = byId(id); if (!it) throw new Error('missing');
+  const cur = +it.qty || 0;
+  const next = r3(mode === 'in' ? cur + qty : mode === 'out' ? cur - qty : qty);
+  const delta = r3(next - cur);
+  const at = Date.now();
+  await addMove({ itemId: id, name: it.name, unit: it.unit || '', type: mode === 'set' ? 'adjust' : mode, delta, after: next, note, price: +it.price || 0, cost: +it.cost || 0, at });
+  it.qty = next; it.updatedAt = at;
+  persist(); renderAll();
+  return { next, delta };
+}
+async function clearSamples() {
+  S.items = S.items.filter(i => !i.example);
+  S.moves = S.moves.filter(m => !m.example);
+  persist(); renderAll();
+}
+function seed() {
+  const now = Date.now(), d0 = startOfDay(now);
+  const rows = [
+    ['rice', 'Rice, 25 kg sack', 'Grains', 'sack', 6, 3, 1180, 1350],
+    ['noodles', 'Instant pancit canton', 'Noodles', 'pack', 84, 40, 11.5, 14],
+    ['sardines', 'Canned sardines 155 g', 'Canned goods', 'can', 18, 24, 19, 24],
+    ['oil', 'Cooking oil 1 L', 'Pantry', 'bottle', 0, 6, 98, 115],
+    ['soy', 'Soy sauce 385 ml', 'Pantry', 'bottle', 22, 10, 21, 27],
+    ['coffee', 'Coffee 3-in-1 sachet', 'Drinks', 'sachet', 140, 60, 5.2, 7],
+    ['water', 'Bottled water 500 ml', 'Drinks', 'bottle', 36, 24, 9, 15],
+    ['soap', 'Bar soap', 'Household', 'pc', 15, 12, 24, 32],
+    ['eggs', 'Eggs, medium (tray of 30)', 'Fresh', 'tray', 4, 4, 232, 260],
+    ['salt', 'Iodized salt 500 g', 'Pantry', 'pack', 30, 10, 14, 18],
+    ['dish', 'Dishwashing liquid 200 ml', 'Household', 'bottle', 11, 8, 31, 40],
+    ['sugar', 'Brown sugar 1 kg', 'Pantry', 'kg', 14, 10, 68, 80]
+  ];
+  S.items = rows.map(([k, name, category, unit, qty, reorder, cost, price]) =>
+    ({ id: 'sample-' + k, name, category, unit, qty, reorder, cost, price, sku: '', example: true, createdAt: d0 - 7 * DAY, updatedAt: now }));
+  const meta = Object.fromEntries(S.items.map(i => [i.id, i]));
+  let s = 7;
+  const rnd = () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
+  const ri = (lo, hi) => lo + Math.floor(rnd() * (hi - lo + 1));
+  const mv = [];
+  const push = (t, k, type, n, note) => {
+    const m = meta['sample-' + k];
+    mv.push({ id: uid(), itemId: m.id, name: m.name, unit: m.unit, type, delta: type === 'in' ? n : -n, after: 0, note, price: m.price, cost: m.cost, at: Math.min(t, now - 60000), example: true });
+  };
+  [[6, 'rice', 10], [6, 'noodles', 120], [6, 'coffee', 200], [3, 'water', 48], [3, 'sardines', 24], [3, 'oil', 12], [2, 'eggs', 6]]
+    .forEach(([d, k, n]) => push(d0 - d * DAY + 9 * 36e5 + ri(0, 50) * 6e4, k, 'in', n, 'Delivery from supplier'));
+  const pool = [['rice', 1, 2], ['noodles', 6, 18], ['sardines', 2, 8], ['oil', 1, 4], ['soy', 1, 3], ['coffee', 10, 30], ['water', 4, 12], ['soap', 1, 3], ['eggs', 1, 2], ['salt', 1, 3], ['dish', 1, 2], ['sugar', 1, 3]];
+  for (let d = 6; d >= 0; d--) {
+    const picks = pool.slice().sort(() => rnd() - .5).slice(0, ri(3, 5));
+    for (const [k, lo, hi] of picks) push(d0 - d * DAY + ri(8, d === 0 ? 13 : 19) * 36e5 + ri(0, 59) * 6e4, k, 'out', ri(lo, hi), 'Sold');
+  }
+  S.moves = mv.sort((x, y) => y.at - x.at);
+  persist();
+}
+async function saveFile(filename, data, type) {
+  const url = URL.createObjectURL(new Blob([data], { type }));
+  const a = el('a', { href: url, download: filename });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+/* ---------- sheet ---------- */
+const sheet = $('#sheet'), scrim = $('#scrim'), sbody = $('#sheet-body');
+function openSheet(title, content) {
+  lastFocus = document.activeElement;
+  sbody.replaceChildren(
+    el('div', { class: 'sheet-head' },
+      el('h2', { id: 'sheet-title' }, title),
+      el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Close', onclick: closeSheet }, svg('<path d="M6 6l12 12M18 6 6 18"/>'))),
+    content);
+  scrim.hidden = false; sheet.hidden = false;
+  document.documentElement.classList.add('lock');
+  sheet.scrollTop = 0;
+  const f = sheet.querySelector('input');
+  if (f) f.focus({ preventScroll: true });
+}
+function closeSheet() {
+  sheet.hidden = true; scrim.hidden = true;
+  document.documentElement.classList.remove('lock');
+  sbody.replaceChildren();
+  if (lastFocus && lastFocus.focus) lastFocus.focus({ preventScroll: true });
+}
+scrim.addEventListener('click', closeSheet);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !sheet.hidden) closeSheet(); });
+
+function field(label, input, hint) {
+  return el('label', { class: 'field' }, el('span', { class: 'lbl' }, label), input, hint ? el('span', { class: 'hint' }, hint) : null);
+}
+
+/* stock in / out / set count */
+function openMove(id, startMode) {
+  const it = byId(id); if (!it) return;
+  const unit = it.unit || 'pc';
+  let mode = startMode;
+  const qtyIn = el('input', { id: 'mv-qty', type: 'number', inputmode: 'decimal', min: '0', step: 'any', value: '1', 'aria-label': 'Quantity' });
+  const note = el('input', { id: 'mv-note', type: 'text', maxlength: '80', autocomplete: 'off' });
+  const err = el('p', { class: 'err', role: 'alert' });
+  const cur = el('b'), nxt = el('b');
+  const save = el('button', { class: 'btn primary', type: 'button' }, 'Save');
+  const seg = {};
+  const labels = { in: 'Stock in', out: 'Stock out', set: 'Set count' };
+  const hints = { in: 'e.g. Delivery from supplier', out: 'e.g. Sold, damaged, own use', set: 'e.g. Physical count' };
+
+  function calc() {
+    const c = +(byId(id) || it).qty || 0;
+    const v = parseFloat(qtyIn.value);
+    if (!Number.isFinite(v)) return { ok: false, msg: 'Enter a quantity.', c };
+    if (mode !== 'set' && v <= 0) return { ok: false, msg: 'Quantity must be more than 0.', c };
+    if (mode === 'set' && v < 0) return { ok: false, msg: 'Count cannot be negative.', c };
+    if (mode === 'out' && v > c) return { ok: false, msg: 'Only ' + q(c) + ' ' + unit + ' in stock.', c };
+    const n = r3(mode === 'in' ? c + v : mode === 'out' ? c - v : v);
+    return { ok: true, v, n, c };
+  }
+  function refresh() {
+    const r = calc();
+    cur.textContent = q(r.c) + ' ' + unit;
+    nxt.textContent = r.ok ? q(r.n) + ' ' + unit : '—';
+    err.textContent = r.ok ? '' : (qtyIn.value === '' ? '' : r.msg);
+    save.disabled = !r.ok;
+    note.placeholder = hints[mode];
+    for (const k in seg) seg[k].setAttribute('aria-pressed', String(k === mode));
+  }
+  function setMode(m) {
+    mode = m;
+    qtyIn.value = m === 'set' ? String(+(byId(id) || it).qty || 0) : '1';
+    refresh();
+  }
+  const segEl = el('div', { class: 'seg', role: 'group', 'aria-label': 'Type of change' },
+    ['in', 'out', 'set'].map(m => (seg[m] = el('button', { type: 'button', class: 'm-' + m, onclick: () => setMode(m) }, labels[m]))));
+  const step = d => { const v = num(qtyIn.value, 0); qtyIn.value = String(Math.max(0, r3(v + d))); refresh(); };
+
+  qtyIn.addEventListener('input', refresh);
+  save.addEventListener('click', async () => {
+    const r = calc(); if (!r.ok) return;
+    if (mode === 'set' && r.n === r.c) { closeSheet(); toast('No change'); return; }
+    save.disabled = true;
+    try {
+      const res = await applyMove(id, mode, r.v, note.value.trim());
+      closeSheet();
+      const sign = res.delta > 0 ? '+' : '−';
+      toast(it.name + ': ' + sign + q(Math.abs(res.delta)) + ' ' + unit + ' → ' + q(res.next) + ' left');
+    } catch (e) { err.textContent = failMsg(); save.disabled = false; }
+  });
+
+  const body = el('div', { class: 'sheet-in' },
+    segEl,
+    el('div', { class: 'qrow' },
+      el('button', { class: 'btn', type: 'button', 'aria-label': 'Decrease', onclick: () => step(-1) }, '−'),
+      qtyIn,
+      el('button', { class: 'btn', type: 'button', 'aria-label': 'Increase', onclick: () => step(1) }, '+')),
+    el('div', { class: 'preview' }, el('span', null, 'Now ', cur), el('span', null, 'After ', nxt)),
+    field('Note (optional)', note),
+    err, save);
+  openSheet(it.name, body);
+  setMode(startMode);
+  try { qtyIn.select(); } catch (e) {}
+}
+
+/* add / edit item */
+function openItemForm(id) {
+  const it = id ? byId(id) : null;
+  const isNew = !it;
+  const cats = [...new Set(S.items.map(i => i.category).filter(Boolean))].sort();
+  const units = ['pc', 'pack', 'sachet', 'bottle', 'can', 'kg', 'sack', 'box', 'tray', 'liter'];
+  const f = {
+    name: el('input', { id: 'f-name', type: 'text', value: it ? it.name : '', maxlength: '80', autocomplete: 'off', placeholder: 'e.g. Cooking oil 1 L' }),
+    cat: el('input', { id: 'f-cat', type: 'text', value: it ? it.category || '' : '', maxlength: '40', list: 'dl-cat', autocomplete: 'off', placeholder: 'e.g. Pantry' }),
+    unit: el('input', { id: 'f-unit', type: 'text', value: it ? it.unit || '' : 'pc', maxlength: '16', list: 'dl-unit', autocomplete: 'off' }),
+    qty: el('input', { id: 'f-qty', type: 'number', inputmode: 'decimal', min: '0', step: 'any', value: '0' }),
+    reorder: el('input', { id: 'f-reorder', type: 'number', inputmode: 'decimal', min: '0', step: 'any', value: it ? it.reorder || 0 : 5 }),
+    cost: el('input', { id: 'f-cost', type: 'number', inputmode: 'decimal', min: '0', step: 'any', value: it ? it.cost || 0 : '' , placeholder: '0'}),
+    price: el('input', { id: 'f-price', type: 'number', inputmode: 'decimal', min: '0', step: 'any', value: it ? it.price || 0 : '', placeholder: '0' }),
+    sku: el('input', { id: 'f-sku', type: 'text', value: it ? it.sku || '' : '', maxlength: '30', autocomplete: 'off' })
+  };
+  const err = el('p', { class: 'err', role: 'alert' });
+  const save = el('button', { class: 'btn primary', type: 'button' }, isNew ? 'Add item' : 'Save changes');
+  save.addEventListener('click', async () => {
+    const name = f.name.value.trim();
+    if (!name) { err.textContent = 'Enter the item name.'; f.name.focus(); return; }
+    const data = {
+      name, category: f.cat.value.trim(), unit: f.unit.value.trim() || 'pc', sku: f.sku.value.trim(),
+      reorder: Math.max(0, num(f.reorder.value)), cost: Math.max(0, num(f.cost.value)), price: Math.max(0, num(f.price.value)),
+      updatedAt: Date.now()
+    };
+    save.disabled = true;
+    try {
+      if (isNew) {
+        const start = Math.max(0, num(f.qty.value));
+        const nid = uid();
+        data.qty = start; data.createdAt = data.updatedAt;
+        await putItem(nid, data);
+        if (start > 0) await addMove({ itemId: nid, name, unit: data.unit, type: 'adjust', delta: start, after: start, note: 'Starting stock', price: data.price, cost: data.cost, at: Date.now() });
+        toast('Added ' + name);
+      } else {
+        await putItem(id, data);
+        toast('Saved ' + name);
+      }
+      closeSheet();
+    } catch (e) { err.textContent = failMsg(); save.disabled = false; }
+  });
+
+  const kids = [
+    el('datalist', { id: 'dl-cat' }, cats.map(c => el('option', { value: c }))),
+    el('datalist', { id: 'dl-unit' }, units.map(u => el('option', { value: u }))),
+    field('Item name', f.name),
+    el('div', { class: 'grid2' }, field('Category', f.cat), field('Unit', f.unit)),
+    el('div', { class: 'grid2' },
+      isNew ? field('Starting stock', f.qty) : el('div', { class: 'field' }, el('span', { class: 'lbl' }, 'In stock now'), el('p', { class: 'num', style: null }, q(it.qty) + ' ' + (it.unit || 'pc')), el('span', { class: 'hint' }, 'Use + and − on the list to change it.')),
+      field('Reorder level', f.reorder, 'Flag as Low at or below this.')),
+    el('div', { class: 'grid2' }, field('Cost price (₱)', f.cost), field('Selling price (₱)', f.price)),
+    field('SKU / code (optional)', f.sku),
+    err, save
+  ];
+  if (!isNew) {
+    let armed = false, t = 0;
+    const del = el('button', { class: 'btn danger', type: 'button' }, 'Delete item');
+    del.addEventListener('click', async () => {
+      if (!armed) {
+        armed = true; del.classList.add('armed'); del.textContent = 'Tap again to delete';
+        t = setTimeout(() => { armed = false; del.classList.remove('armed'); del.textContent = 'Delete item'; }, 4000);
+        return;
+      }
+      clearTimeout(t); del.disabled = true;
+      try { await removeItem(id); closeSheet(); toast('Deleted ' + it.name); }
+      catch (e) { err.textContent = failMsg(); del.disabled = false; }
+    });
+    kids.push(del);
+  }
+  openSheet(isNew ? 'Add item' : 'Edit item', el('div', { class: 'sheet-in' }, kids));
+}
+
+/* ---------- stock tab ---------- */
+function visibleItems() {
+  const s = S.q.trim().toLowerCase();
+  return S.items.filter(i => {
+    const st = status(i);
+    if (S.filter === 'low' && st === 'ok') return false;
+    if (S.filter === 'out' && st !== 'out') return false;
+    if (!s) return true;
+    return [i.name, i.category, i.sku].some(v => String(v || '').toLowerCase().includes(s));
+  }).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+function renderBanner() {
+  const b = $('#banner'); b.replaceChildren();
+  if (S.mode === 'memory') b.append(el('div', { class: 'note' }, el('p', null, 'Hindi ma-save ng browser na ito ang data. Mawawala ito kapag isinara o nag-refresh ka.')));
+  if (S.slow) b.append(el('div', { class: 'note' }, el('p', null, 'Hindi pa maabot ang saved data. Baka luma ang nakikita mo.')));
+  if (S.items.some(i => i.example)) {
+    let armed = false, t = 0;
+    const btn = el('button', { class: 'btn small', type: 'button' }, 'Clear samples');
+    btn.addEventListener('click', async () => {
+      if (!armed) {
+        armed = true; btn.textContent = 'Tap again to clear';
+        t = setTimeout(() => { armed = false; btn.textContent = 'Clear samples'; }, 4000);
+        return;
+      }
+      clearTimeout(t); btn.disabled = true;
+      try { await clearSamples(); toast('Sample items cleared'); } catch (e) { toast(failMsg()); btn.disabled = false; }
+    });
+    b.append(el('div', { class: 'note' }, el('p', null, 'Mga halimbawang item ito para makita kung paano gumagana. I-clear kapag handa ka nang ilagay ang sarili mong stock.'), btn));
+  }
+}
+
+function renderSummary() {
+  const low = S.items.filter(i => status(i) !== 'ok').length;
+  const value = S.items.reduce((s, i) => s + (+i.qty || 0) * (+i.cost || 0), 0);
+  const sum = $('#sum'); sum.replaceChildren(
+    el('div', { class: 'cell' }, el('span', { class: 'k' }, 'Items'), el('span', { class: 'v' }, q(S.items.length))),
+    el('button', { class: 'cell', type: 'button', 'aria-label': 'Show items to restock', onclick: () => { S.filter = 'low'; renderStock(); } },
+      el('span', { class: 'k' }, 'To restock'), el('span', { class: 'v' + (low ? ' warn' : '') }, q(low))),
+    el('div', { class: 'cell' }, el('span', { class: 'k' }, 'Stock value'), el('span', { class: 'v' }, pesoShort(value))));
+}
+
+function itemRow(i) {
+  const st = status(i);
+  const meta = [i.category || 'Uncategorized', i.price ? peso(i.price) + ' / ' + (i.unit || 'pc') : null].filter(Boolean).join(' · ');
+  return el('li', { class: 'item' },
+    el('button', { class: 'info', type: 'button', 'aria-label': 'Edit ' + i.name, onclick: () => openItemForm(i.id) },
+      el('span', { class: 'name' }, i.name),
+      el('span', { class: 'meta' }, meta),
+      el('span', { class: 'pill ' + st }, STAT[st] + (st === 'low' ? ' · reorder at ' + q(i.reorder) : ''))),
+    el('div', { class: 'qty ' + st }, el('b', null, q(i.qty)), el('small', null, i.unit || 'pc')),
+    el('div', { class: 'steps' },
+      el('button', { class: 'step minus', type: 'button', 'aria-label': 'Stock out ' + i.name, disabled: (+i.qty || 0) <= 0, onclick: () => openMove(i.id, 'out') }, '−'),
+      el('button', { class: 'step plus', type: 'button', 'aria-label': 'Stock in ' + i.name, onclick: () => openMove(i.id, 'in') }, '+')));
+}
+
+function renderStock() {
+  renderBanner(); renderSummary();
+  const all = S.items.length;
+  const low = S.items.filter(i => status(i) !== 'ok').length;
+  const out = S.items.filter(i => status(i) === 'out').length;
+  $('#chips').replaceChildren(...[['all', 'All', all], ['low', 'Low', low], ['out', 'Out', out]].map(([k, label, n]) =>
+    el('button', { class: 'chip', type: 'button', 'aria-pressed': String(S.filter === k), onclick: () => { S.filter = k; renderStock(); } }, label + ' ' + n)));
+  const list = $('#list'); list.replaceChildren();
+  if (!S.loaded) { list.append(el('div', { class: 'empty' }, el('p', null, 'Loading stock…'))); return; }
+  if (!all) {
+    list.append(el('div', { class: 'empty' }, el('h3', null, 'Wala pang items'), el('p', null, 'Magdagdag ng unang item para masimulan ang stock at inventory report.'),
+      el('button', { class: 'btn primary', type: 'button', onclick: () => openItemForm() }, 'Add first item')));
+    return;
+  }
+  const rows = visibleItems();
+  if (!rows.length) { list.append(el('div', { class: 'empty' }, el('p', null, 'Walang tugma sa hinahanap mo.'))); return; }
+  list.append(el('ul', { class: 'list' }, rows.map(itemRow)));
+}
+
+/* ---------- report tab ---------- */
+function csvCell(v) {
+  if (v == null) return '';
+  let s = String(v);
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+const toCsv = rows => '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
+const stamp = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+async function exportCsv(filename, rows) {
+  try { await saveFile(filename, toCsv(rows), 'text/csv;charset=utf-8'); toast('Na-download: ' + filename); }
+  catch (e) {
+    if (e && e.code === 'declined') return;
+    toast(e && e.code === 'host_unavailable' ? 'Hindi makapag-download sa app na ito. Buksan sa browser.' : 'Hindi na-download. Subukan ulit.');
+  }
+}
+const inventoryRows = () => [
+  ['Item', 'SKU', 'Category', 'Unit', 'In stock', 'Reorder level', 'Status', 'Cost price', 'Selling price', 'Stock value (cost)', 'Stock value (selling)'],
+  ...S.items.slice().sort((a, b) => String(a.name).localeCompare(String(b.name))).map(i => [
+    i.name, i.sku || '', i.category || '', i.unit || '', +i.qty || 0, +i.reorder || 0, STAT[status(i)], +i.cost || 0, +i.price || 0,
+    r3((+i.qty || 0) * (+i.cost || 0)), r3((+i.qty || 0) * (+i.price || 0))])
+];
+const movementRows = () => [
+  ['Date', 'Time', 'Item', 'Type', 'Change', 'Stock after', 'Unit', 'Selling price', 'Note'],
+  ...S.moves.map(m => {
+    const d = new Date(m.at);
+    return [d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'),
+      d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }), m.name, m.type === 'adjust' ? 'set/adjust' : m.type,
+      m.delta, m.after, m.unit || '', +m.price || 0, m.note || ''];
+  })
+];
+
+function renderReport() {
+  const root = $('#tab-report'); root.replaceChildren();
+  const sod = startOfDay(Date.now());
+  const from = S.range === 0 ? 0 : sod - (S.range - 1) * DAY;
+  const mv = S.moves.filter(m => m.at >= from);
+  let inU = 0, outU = 0, sales = 0, profit = 0;
+  const movers = new Map();
+  for (const m of mv) {
+    if (m.type === 'in') inU += m.delta;
+    else if (m.type === 'out') {
+      const u = -m.delta; outU += u; sales += u * (+m.price || 0); profit += u * ((+m.price || 0) - (+m.cost || 0));
+      const o = movers.get(m.itemId) || { name: m.name, unit: m.unit, units: 0 };
+      o.units += u; o.name = m.name; movers.set(m.itemId, o);
+    }
+  }
+
+  // period
+  const ranges = [[7, 'Last 7 days'], [30, 'Last 30 days'], [0, 'All time']];
+  root.append(el('div', { class: 'chips', role: 'group', 'aria-label': 'Report period' }, ranges.map(([v, label]) =>
+    el('button', { class: 'chip', type: 'button', 'aria-pressed': String(S.range === v), onclick: () => { S.range = v; renderReport(); } }, label))));
+
+  root.append(el('section', null,
+    el('h2', null, 'Movement'),
+    el('div', { class: 'stats' },
+      el('div', { class: 'cell' }, el('span', { class: 'k' }, 'Stock in'), el('span', { class: 'v' }, q(inU))),
+      el('div', { class: 'cell' }, el('span', { class: 'k' }, 'Stock out'), el('span', { class: 'v' }, q(outU))),
+      el('div', { class: 'cell' }, el('span', { class: 'k' }, 'Sales (est.)'), el('span', { class: 'v' }, pesoShort(sales))),
+      el('div', { class: 'cell' }, el('span', { class: 'k' }, 'Profit (est.)'), el('span', { class: 'v' }, pesoShort(profit)))),
+    el('p', { class: 'sub' }, 'Estimates = units out × the selling and cost price saved with each stock-out. Units are counted across all items.')));
+
+  // 7-day chart
+  const days = [];
+  for (let k = 6; k >= 0; k--) days.push({ t: sod - k * DAY, inU: 0, outU: 0 });
+  for (const m of S.moves) {
+    const d = days.find(x => m.at >= x.t && m.at < x.t + DAY);
+    if (!d) continue;
+    if (m.type === 'in') d.inU += m.delta; else if (m.type === 'out') d.outU += -m.delta;
+  }
+  const peak = Math.max(1, ...days.map(d => Math.max(d.inU, d.outU)));
+  const h = v => v ? Math.max(3, v / peak * 100) + '%' : '0';
+  root.append(el('section', null,
+    el('h2', null, 'Last 7 days'),
+    el('div', { class: 'legend' }, el('span', null, el('i', { class: 'b-in' }), 'Stock in'), el('span', null, el('i', { class: 'b-out' }), 'Stock out')),
+    el('div', { class: 'chart' }, days.map(d => {
+      const bi = el('i', { class: 'b-in' }), bo = el('i', { class: 'b-out' });
+      bi.style.height = h(d.inU); bo.style.height = h(d.outU);
+      return el('div', { class: 'col' },
+        el('div', { class: 'bars' }, bi, bo),
+        el('span', { class: 'd' }, new Date(d.t).toLocaleDateString('en-PH', { weekday: 'short' })),
+        el('span', { class: 'n in' }, '+' + q(d.inU)),
+        el('span', { class: 'n outv' }, '−' + q(d.outU)));
+    }))));
+
+  // fast movers
+  const top = [...movers.values()].sort((a, b) => b.units - a.units).slice(0, 5);
+  const topMax = Math.max(1, ...top.map(t => t.units));
+  root.append(el('section', null,
+    el('h2', null, 'Fast movers'),
+    top.length
+      ? el('div', { class: 'rank' }, top.map(t => {
+          const b = el('i'); b.style.width = (t.units / topMax * 100) + '%';
+          return el('div', null,
+            el('div', { class: 'line' }, el('span', null, t.name), el('span', { class: 'num' }, q(t.units) + ' ' + (t.unit || ''))),
+            el('div', { class: 'bar' }, b));
+        }))
+      : el('div', { class: 'empty' }, el('p', null, 'Wala pang stock out sa period na ito.'))));
+
+  // restock
+  const need = S.items.filter(i => status(i) !== 'ok').sort((a, b) => ((+a.qty || 0) / Math.max(+a.reorder || 0, 1)) - ((+b.qty || 0) / Math.max(+b.reorder || 0, 1)));
+  let restockCost = 0;
+  const rrows = need.map(i => {
+    const target = Math.max((+i.reorder || 0) * 2, 1);
+    const sug = Math.max(Math.ceil(target - (+i.qty || 0)), 1);
+    const cost = sug * (+i.cost || 0); restockCost += cost;
+    return el('li', { class: 'restock' },
+      el('div', { class: 'info', style: null }, el('span', { class: 'name' }, i.name),
+        el('span', { class: 'meta' }, q(i.qty) + ' left · reorder at ' + q(i.reorder))),
+      el('div', { class: 'sug' }, '+' + q(sug) + ' ' + (i.unit || 'pc'), el('div', { class: 'meta' }, peso(cost))),
+      el('button', { class: 'btn small', type: 'button', onclick: () => openMove(i.id, 'in') }, 'Receive stock'));
+  });
+  root.append(el('section', null,
+    el('h2', null, 'Restock list'),
+    need.length
+      ? el('ul', { class: 'list' }, rrows, el('li', { class: 'total' }, el('span', null, 'Estimated cost'), el('span', { class: 'num' }, peso(restockCost))))
+      : el('div', { class: 'empty' }, el('p', null, 'Walang kailangang i-restock ngayon.')),
+    need.length ? el('p', { class: 'sub' }, 'Suggested quantity refills each item up to 2× its reorder level.') : null));
+
+  // value by category
+  const cats = new Map();
+  let costTotal = 0, retailTotal = 0;
+  for (const i of S.items) {
+    const k = i.category || 'Uncategorized';
+    const v = (+i.qty || 0) * (+i.cost || 0);
+    cats.set(k, (cats.get(k) || 0) + v);
+    costTotal += v; retailTotal += (+i.qty || 0) * (+i.price || 0);
+  }
+  const catList = [...cats.entries()].sort((a, b) => b[1] - a[1]);
+  const catMax = Math.max(1, ...catList.map(c => c[1]));
+  root.append(el('section', null,
+    el('h2', null, 'Stock value'),
+    el('div', { class: 'stats' },
+      el('div', { class: 'cell' }, el('span', { class: 'k' }, 'At cost'), el('span', { class: 'v' }, pesoShort(costTotal))),
+      el('div', { class: 'cell' }, el('span', { class: 'k' }, 'At selling price'), el('span', { class: 'v' }, pesoShort(retailTotal)))),
+    catList.length ? el('div', { class: 'rank' }, catList.map(([name, v]) => {
+      const b = el('i'); b.style.width = (v / catMax * 100) + '%';
+      return el('div', null, el('div', { class: 'line' }, el('span', null, name), el('span', { class: 'num' }, peso(v))), el('div', { class: 'bar' }, b));
+    })) : null));
+
+  // export
+  root.append(el('section', null,
+    el('h2', null, 'Export'),
+    el('div', { class: 'actions' },
+      el('button', { class: 'btn', type: 'button', onclick: () => exportCsv('inventory-' + stamp() + '.csv', inventoryRows()) }, 'Download inventory (CSV)'),
+      el('button', { class: 'btn', type: 'button', onclick: () => exportCsv('stock-movements-' + stamp() + '.csv', movementRows()) }, 'Download movements (CSV)')),
+    el('p', { class: 'sub' }, 'Bubukas sa Excel o Google Sheets.')));
+
+  // backup + restore (data lives only on this device)
+  const fileIn = el('input', { type: 'file', accept: 'application/json,.json', id: 'restore-file', hidden: true });
+  fileIn.addEventListener('change', async () => {
+    const f = fileIn.files && fileIn.files[0]; if (!f) return;
+    try {
+      const d = JSON.parse(await f.text());
+      if (!Array.isArray(d.items) || !Array.isArray(d.moves)) throw new Error('bad');
+      S.items = d.items.filter(i => i && typeof i.id === 'string' && typeof i.name === 'string');
+      S.moves = d.moves.filter(m => m && typeof m.at === 'number').sort((x, y) => y.at - x.at);
+      persist(); renderAll(); toast('Na-restore ang backup');
+    } catch (e) { toast('Hindi mabasa ang backup file.'); }
+  });
+  let armed = false, armT = 0;
+  const restoreBtn = el('button', { class: 'btn', type: 'button' }, 'Restore from backup');
+  restoreBtn.addEventListener('click', () => {
+    if (!armed) {
+      armed = true; restoreBtn.textContent = 'Tap again: papalitan ang kasalukuyang data';
+      armT = setTimeout(() => { armed = false; restoreBtn.textContent = 'Restore from backup'; }, 5000);
+      return;
+    }
+    clearTimeout(armT); armed = false; restoreBtn.textContent = 'Restore from backup';
+    fileIn.value = ''; fileIn.click();
+  });
+  root.append(el('section', null,
+    el('h2', null, 'Backup'),
+    el('div', { class: 'actions' },
+      el('button', { class: 'btn primary', type: 'button', onclick: () => { saveFile('bodega-backup-' + stamp() + '.json', JSON.stringify({ v: 1, items: S.items, moves: S.moves }), 'application/json'); toast('Na-download ang backup'); } }, 'Download backup'),
+      restoreBtn, fileIn),
+    el('p', { class: 'sub' }, 'Nasa phone/browser na ito lang ang data mo. Mag-download ng backup paminsan-minsan, lalo na bago burahin ang browser data o palitan ang phone.')));
+}
+
+/* ---------- history tab ---------- */
+function renderHistory() {
+  const root = $('#tab-history'); root.replaceChildren();
+  if (!S.moves.length) {
+    root.append(el('div', { class: 'empty' }, el('h3', null, 'Wala pang galaw'), el('p', null, 'Lalabas dito ang bawat stock in, stock out at bilang.')));
+    return;
+  }
+  const shown = S.moves.slice(0, 150);
+  let key = '', ul = null;
+  for (const m of shown) {
+    const k = dayLabel(m.at);
+    if (k !== key) { key = k; root.append(el('h2', { class: 'day' }, k)); ul = el('ul', { class: 'list' }); root.append(ul); }
+    const d = +m.delta || 0;
+    const tag = m.type === 'in' ? 'IN' : m.type === 'out' ? 'OUT' : 'SET';
+    ul.append(el('li', { class: 'mv' },
+      el('span', { class: 'tag ' + (m.type === 'in' ? 'in' : m.type === 'out' ? 'out' : '') }, tag),
+      el('div', { class: 'what' }, el('div', null, m.name), m.note ? el('div', null, m.note) : null),
+      el('div', { class: 'amt' }, el('b', null, (d > 0 ? '+' : d < 0 ? '−' : '') + q(Math.abs(d)) + ' ' + (m.unit || '')), el('span', null, timeLabel(m.at)))));
+  }
+  if (S.moves.length > shown.length) root.append(el('p', { class: 'sub' }, 'Showing the latest 150. I-download ang CSV sa Report para sa buong listahan.'));
+}
+
+/* ---------- shell ---------- */
+function renderAll() {
+  if (S.tab === 'stock') renderStock();
+  else if (S.tab === 'report') renderReport();
+  else renderHistory();
+}
+function setTab(t) {
+  S.tab = t;
+  for (const k of ['stock', 'report', 'history']) $('#tab-' + k).hidden = k !== t;
+  document.querySelectorAll('.nav button').forEach(b => {
+    if (b.dataset.tab === t) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
+  renderAll();
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll('.nav button').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+$('#add').addEventListener('click', () => openItemForm());
+$('#q').addEventListener('input', e => { S.q = e.target.value; renderStock(); });
+$('#today').textContent = new Date().toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric' });
+
+/* ---------- boot ---------- */
+if (!load()) seed();
+S.loaded = true; S.mode = 'offline';
+renderAll();
+
+/* offline app: ask the browser to keep this site's data, and cache the app files */
+try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+}
+})();
+</script>
+
+</body>
+</html>
